@@ -16,7 +16,7 @@ func gptCompleteContext(ori string) (ret string) {
 		// Model: Davinci003 成果最好，但是也最慢。
 		Model: gpt3.GPT3TextDavinci003,
 		// 最大輸出內容，可以調整一下。
-		MaxTokens: 300,
+		MaxTokens: 2000,
 		// 輸入文字，也就是你平時在 ChatGPT 詢問他的問題。
 		Prompt: ori,
 	}
