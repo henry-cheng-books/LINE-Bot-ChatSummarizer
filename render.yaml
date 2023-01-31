@@ -1,6 +1,6 @@
 services:
 - type: web
-  name: LINE-Bot-ChatSummarizer
+  name: LINE-Bot-ChatGPT
   env: go
   buildCommand: go build -o app
   startCommand: ./app
