@@ -19,17 +19,35 @@ import (
 	"os"
 
 	"github.com/line/line-bot-sdk-go/v7/linebot"
-	gpt3 "github.com/sashabaranov/go-gpt3"
+	"github.com/sashabaranov/go-openai"
 )
 
 var bot *linebot.Client
-var client *gpt3.Client
+var client *openai.Client
 var summaryQueue GroupDB
+var stickerRedeemable bool
+var enableRedeem string
+
+const RedeemStickerPID = "789"
+const RedeemStickerSID = "10856"
+
+type GPT_ACTIONS int
+
+const (
+	GPT_Complete      GPT_ACTIONS = 0
+	GPT_Draw          GPT_ACTIONS = 1
+	GPT_Whister       GPT_ACTIONS = 2
+	GPT_GPT4_Complete GPT_ACTIONS = 3
+)
 
 func main() {
+	stickerRedeemable = false
 	var err error
 
-	//  如果有預設 DABTASE_URL 就建立 PostGresSQL; 反之則建立 Mem DB
+	// Enable new feature (YES, default no)
+	enableRedeem = os.Getenv("REDEEM_ENABLE")
+
+	//  If DABTASE_URL is preset, create PostGresSQL; otherwise, create Mem DB.
 	pSQL := os.Getenv("DATABASE_URL")
 	if pSQL != "" {
 		summaryQueue = NewPGSql(pSQL)
@@ -44,10 +62,14 @@ func main() {
 	apiKey := os.Getenv("ChatGptToken")
 
 	if apiKey != "" {
-		client = gpt3.NewClient(apiKey)
+		client = openai.NewClient(apiKey)
 	}
 
 	http.HandleFunc("/callback", callbackHandler)
 	addr := fmt.Sprintf(":%s", port)
 	http.ListenAndServe(addr, nil)
+}
+
+func IsRedemptionEnabled() bool {
+	return enableRedeem == "YES"
 }

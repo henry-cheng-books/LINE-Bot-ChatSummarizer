@@ -15,9 +15,9 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if err == linebot.ErrInvalidSignature {
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 		} else {
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 		}
 		return
 	}
@@ -29,11 +29,48 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 			case *linebot.TextMessage:
 				// Directly to ChatGPT
 				if strings.Contains(message.Text, ":gpt") {
-					handleGPT(event, message.Text)
+					// New feature.
+					if IsRedemptionEnabled() {
+						if stickerRedeemable {
+							handleGPT(GPT_Complete, event, message.Text)
+							stickerRedeemable = false
+						} else {
+							handleRedeemRequestMsg(event)
+						}
+					} else {
+						// Original one
+						handleGPT(GPT_Complete, event, message.Text)
+					}
+				} else if strings.Contains(message.Text, ":gpt4") {
+					// New feature.
+					if IsRedemptionEnabled() {
+						if stickerRedeemable {
+							handleGPT(GPT_GPT4_Complete, event, message.Text)
+							stickerRedeemable = false
+						} else {
+							handleRedeemRequestMsg(event)
+						}
+					} else {
+						// Original one
+						handleGPT(GPT_GPT4_Complete, event, message.Text)
+					}
+				} else if strings.Contains(message.Text, ":draw") {
+					// New feature.
+					if IsRedemptionEnabled() {
+						if stickerRedeemable {
+							handleGPT(GPT_Draw, event, message.Text)
+							stickerRedeemable = false
+						} else {
+							handleRedeemRequestMsg(event)
+						}
+					} else {
+						// Original one
+						handleGPT(GPT_Draw, event, message.Text)
+					}
 				} else if strings.EqualFold(message.Text, ":list_all") && isGroupEvent(event) {
-					handleListAll(event, message.Text)
+					handleListAll(event)
 				} else if strings.EqualFold(message.Text, ":sum_all") && isGroupEvent(event) {
-					handleSumAll(event, message.Text)
+					handleSumAll(event)
 				} else if isGroupEvent(event) {
 					// 如果聊天機器人在群組中，開始儲存訊息。
 					handleStoreMsg(event, message.Text)
@@ -44,6 +81,16 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 				var kw string
 				for _, k := range message.Keywords {
 					kw = kw + "," + k
+				}
+
+				log.Println("Sticker: PID=", message.PackageID, " SID=", message.StickerID)
+				if IsRedemptionEnabled() {
+					if message.PackageID == RedeemStickerPID && message.StickerID == RedeemStickerSID {
+						stickerRedeemable = true
+						if _, err = bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage("你的賦能功能啟動了！")).Do(); err != nil {
+							log.Print(err)
+						}
+					}
 				}
 
 				if isGroupEvent(event) {
@@ -63,8 +110,8 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleSumAll(event *linebot.Event, message string) {
-	// 把聊天群組裡面的訊息都捲出來（依照先後順序）
+func handleSumAll(event *linebot.Event) {
+	// Scroll through all the messages in the chat group (in chronological order).
 	oriContext := ""
 	q := summaryQueue.ReadGroupInfo(getGroupID(event))
 	for _, m := range q {
@@ -86,7 +133,7 @@ func handleSumAll(event *linebot.Event, message string) {
 
 	// 就是請 ChatGPT 幫你總結
 	oriContext = fmt.Sprintf("幫我總結 `%s`", oriContext)
-	reply := gptCompleteContext(oriContext)
+	reply := gptGPT3CompleteContext(oriContext)
 
 	// 因為 ChatGPT 可能會很慢，所以這邊後來用 SendMsg 來發送私訊給使用者。
 	if _, err = bot.PushMessage(event.Source.UserID, linebot.NewTextMessage(reply)).Do(); err != nil {
@@ -94,7 +141,7 @@ func handleSumAll(event *linebot.Event, message string) {
 	}
 }
 
-func handleListAll(event *linebot.Event, message string) {
+func handleListAll(event *linebot.Event) {
 	reply := ""
 	q := summaryQueue.ReadGroupInfo(getGroupID(event))
 	for _, m := range q {
@@ -106,16 +153,47 @@ func handleListAll(event *linebot.Event, message string) {
 	}
 }
 
-func handleGPT(event *linebot.Event, message string) {
-	reply := gptCompleteContext(message)
+func handleGPT(action GPT_ACTIONS, event *linebot.Event, message string) {
+	switch action {
+	case GPT_Complete:
+		reply := gptGPT3CompleteContext(message)
+		if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(reply)).Do(); err != nil {
+			log.Print(err)
+		}
+	case GPT_GPT4_Complete:
+		reply := gptGPT4CompleteContext(message)
+		if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(reply)).Do(); err != nil {
+			log.Print(err)
+		}
+	case GPT_Draw:
+		if reply, err := gptImageCreate(message); err != nil {
+			if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage("無法正確顯示圖形.")).Do(); err != nil {
+				log.Print(err)
+			}
+		} else {
+			if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage("根據你的提示，畫出以下圖片："), linebot.NewImageMessage(reply, reply)).Do(); err != nil {
+				log.Print(err)
+			}
+		}
+	}
 
-	if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(reply)).Do(); err != nil {
+}
+
+func handleRedeemRequestMsg(event *linebot.Event) {
+	// First, obtain the user's Display Name (i.e., the name displayed).
+	userName := event.Source.UserID
+	userProfile, err := bot.GetProfile(event.Source.UserID).Do()
+	if err == nil {
+		userName = userProfile.DisplayName
+	}
+
+	if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(userName+":你需要買貼圖，開啟這個功能"), linebot.NewStickerMessage(RedeemStickerPID, RedeemStickerSID)).Do(); err != nil {
 		log.Print(err)
 	}
 }
 
 func handleStoreMsg(event *linebot.Event, message string) {
-	// 先取得使用者 Display Name (也就是顯示的名稱)
+	// Get user display name. (It is nick name of the user define.)
 	userName := event.Source.UserID
 	userProfile, err := bot.GetProfile(event.Source.UserID).Do()
 	if err == nil {
